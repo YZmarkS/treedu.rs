@@ -1,6 +1,8 @@
 use crate::{inode::*, layout::*, scanner::*, squarify::*};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::prelude::Rect;
+use std::fs::remove_dir_all;
+use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -30,11 +32,13 @@ pub struct NewLayoutContext {
     pub help_bar: Rect,
 }
 
+#[derive(Debug)]
 pub enum DeleteChoice {
     Yes,
     No,
 }
 
+#[derive(Debug)]
 pub enum Status {
     Exit,
     Swapping,
@@ -54,7 +58,7 @@ pub enum Status {
     },
     DeleteSelected,
     DeletingSelected {
-        delete_status: Arc<RwLock<std::io::Result<Deleted>>>,
+        deleted_p: Arc<RwLock<std::io::Result<Deleted>>>,
         deleting_thread_handle: JoinHandle<()>,
     },
     DeletionFailed,
@@ -211,56 +215,11 @@ impl State {
 
             Simple business logic, but many house keeping
              */
-            DeletionConfirmation { choice } => {
-                use DeleteChoice::*;
-
-                let event = crossterm::event::read().unwrap();
-
-                match event {
-                    Event::Key(KeyEvent { code, .. }) => match code {
-                        KeyCode::Enter => match choice {
-                            Yes => {
-                                todo!()
-                            }
-                            No => {
-                                todo!()
-                            }
-                        },
-                        KeyCode::Left => DeletionConfirmation { choice: Yes },
-                        KeyCode::Right => DeletionConfirmation { choice: No },
-                        _ => DeletionConfirmation { choice },
-                    },
-                    _ => DeletionConfirmation { choice },
-                }
-            }
-            DeleteSelected => {
-                let index_in_directory = self.now.starting_index + self.now.selected;
-                todo!()
-            }
-            DeletingSelected {
-                delete_status,
-                deleting_thread_handle,
-            } => {
-		let status = match *delete_status.read().unwrap() {
-		    Ok(x) => Ok(x),
-		    Err(_) => Err(()),
-		};
-
-                match status {
-                    Ok(false) => DeletingSelected {
-                        delete_status,
-                        deleting_thread_handle,
-                    },
-                    Ok(true) => DeletionCleanup,
-                    Err(_) => DeletionFailed,
-                }
-            }
-            DeletionFailed => {
-                todo!()
-            }
-            DeletionCleanup => {
-                todo!()
-            }
+            status @ (DeletionConfirmation { .. }
+            | DeleteSelected
+            | DeletingSelected { .. }
+            | DeletionFailed
+            | DeletionCleanup) => self.delta_delete(status),
 
             /* Displaying and Waiting for User Input
 
@@ -434,5 +393,77 @@ impl State {
         *usage = children.iter().map(|inode| inode.borrow().usage).sum();
         children.sort_by_key(|inode| inode.borrow().usage);
         children.reverse();
+    }
+
+    fn delta_delete(&mut self, status: Status) -> Status {
+        use Status::*;
+        match status {
+            DeletionConfirmation { choice } => {
+                use crossterm::event::{
+                    Event::Key,
+                    KeyCode::{Enter, Left, Right},
+                };
+                use DeleteChoice::*;
+
+                let event = crossterm::event::read().unwrap();
+                match (event, choice) {
+                    (Key(KeyEvent { code: Enter, .. }), Yes) => DeleteSelected,
+                    (Key(KeyEvent { code: Enter, .. }), No) => CalcNewLayout,
+                    (Key(KeyEvent { code: Left, .. }), _) => DeletionConfirmation { choice: Yes },
+                    (Key(KeyEvent { code: Right, .. }), _) => DeletionConfirmation { choice: No },
+                    (_, choice) => DeletionConfirmation { choice },
+                }
+            }
+            DeleteSelected => {
+                let index_in_directory = self.now.starting_index + self.now.selected;
+		let current_directory = self.now.directory.borrow();
+		let children = match &(current_directory.detail) {
+		    InodeDetail::Dir(children) => children,
+		    _ => panic!("Delete: Durrent directory is not a directory"),
+		};
+		let child = match children.get(index_in_directory) {
+		    Some(child) => child,
+		    None => todo!(),
+		};
+		let path_to_delete = child.borrow().path.clone();
+
+		let deleted_p = Arc::new(RwLock::new(Ok(false)));
+		let deleted_p_clone = Arc::clone(&deleted_p);
+		let deleting_thread_handle = thread::spawn(move || {
+		    let remove_result = remove_dir_all(path_to_delete);
+		    let remove_result = remove_result.map(|_| true);
+		    *deleted_p_clone.write().unwrap() = remove_result;
+		});
+
+		DeletingSelected { deleted_p, deleting_thread_handle }
+            }
+            DeletingSelected {
+                deleted_p,
+                deleting_thread_handle,
+            } => {
+                let status = match *deleted_p.read().unwrap() {
+                    Ok(b) => Ok(b),
+                    Err(_) => Err(()),
+                };
+
+                match status {
+                    Ok(false) => DeletingSelected {
+                        deleted_p,
+                        deleting_thread_handle,
+                    },
+                    Ok(true) => DeletionCleanup,
+                    Err(_) => DeletionFailed,
+                }
+            }
+            DeletionFailed => {
+                todo!()
+            }
+            DeletionCleanup => {
+                todo!()
+            }
+            _ => {
+                panic!("delta_delete: Impossible state {:?}", status);
+            }
+        }
     }
 }

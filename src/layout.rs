@@ -88,17 +88,20 @@ fn calc_offset((low1, high1): (Measure, Measure), (low2, high2): (Measure, Measu
     (mid2 - mid1).abs()
 }
 
+#[derive(Debug)]
 pub struct Cell {
     pub rect: Rect,
     pub content: CellContent,
 }
 
+#[derive(Debug)]
 pub enum CellContent {
     Inode(Rc<RefCell<Inode>>),
     Other(OtherCellContent),
     Empty,
 }
 
+#[derive(Debug)]
 pub struct OtherCellContent {
     pub starting_index: usize,
     pub usage: SizeUnit,
@@ -106,6 +109,7 @@ pub struct OtherCellContent {
 
 pub type CellId = usize;
 
+#[derive(Debug)]
 pub struct Neighbours {
     pub top: Option<CellId>,
     pub bottom: Option<CellId>,
