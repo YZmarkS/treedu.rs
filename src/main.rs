@@ -10,6 +10,7 @@ mod layout;
 mod logic;
 mod main_loop;
 mod render;
+mod render_utils;
 mod scanner;
 mod squarify;
 use inode::*;
@@ -47,7 +48,7 @@ fn main() -> io::Result<()> {
         draw_areas: DrawAreas {
             directory_path_rect: Rect::new(0, 0, 0, 0),
             entry_name_rect: Rect::new(0, 0, 0, 0),
-            entry_info_rect: Rect::new(0, 0, 0, 0),
+            entry_size_rect: Rect::new(0, 0, 0, 0),
             canvas: Rect::new(0, 0, 0, 0),
             help_rect: Rect::new(0, 0, 0, 0),
             modal_rect: Rect::new(0, 0, 0, 0),

@@ -2,7 +2,6 @@ use crate::{inode::*, layout::*, scanner::*, squarify::*};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::prelude::Rect;
 use std::fs::remove_dir_all;
-use std::ops::DerefMut;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -19,20 +18,7 @@ pub struct HistoryEntry {
     pub selected: CellIndex,
 }
 
-pub struct DisplayingContext {
-    pub info_bar: Rect,
-    pub cells: Vec<Cell>,
-    pub neighbours: Vec<Neighbours>,
-    pub help_bar: Rect,
-}
-
-pub struct NewLayoutContext {
-    pub info_bar: Rect,
-    pub canvas: Rect,
-    pub help_bar: Rect,
-}
-
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DeleteChoice {
     Yes,
     No,
@@ -49,8 +35,8 @@ pub enum Status {
     },
     ReturnToHeadOfCurrentDirectory,
     CalcNewLayout,
-    Displaying {
-        cells: Vec<Cell>,
+    DisplayTreemap {
+        tiles: Vec<Tile>,
         neighbours: Vec<Neighbours>,
     },
     DeletionConfirmation {
@@ -68,7 +54,7 @@ pub enum Status {
 pub struct DrawAreas {
     pub directory_path_rect: Rect,
     pub entry_name_rect: Rect,
-    pub entry_info_rect: Rect,
+    pub entry_size_rect: Rect,
     pub canvas: Rect,
     pub help_rect: Rect,
     pub modal_rect: Rect,
@@ -205,10 +191,10 @@ impl State {
                     canvas.height - 1,
                 );
                 let rects = squarify_to_rects(&squarify, canvas);
-                let cells = make_cell_list(&rects, children, self.now.starting_index);
-                let neighbours = make_neighbours(&cells);
+                let tiles = make_tiles(&rects, children, self.now.starting_index);
+                let neighbours = make_neighbours(&tiles);
 
-                Displaying { cells, neighbours }
+                DisplayTreemap { tiles, neighbours }
             }
 
             /* Delete Selected
@@ -228,7 +214,7 @@ impl State {
 
             The code is ugly but necessary.
              */
-            Displaying { cells, neighbours } => {
+            DisplayTreemap { tiles: cells, neighbours } => {
                 let event = crossterm::event::read().unwrap();
                 match event {
                     Event::Resize(_, _) => CalcNewLayout,
@@ -243,19 +229,19 @@ impl State {
                         match &key_event.code {
                             KeyCode::Up => {
                                 self.up(&neighbours);
-                                Displaying { cells, neighbours }
+                                DisplayTreemap { tiles: cells, neighbours }
                             }
                             KeyCode::Down => {
                                 self.down(&neighbours);
-                                Displaying { cells, neighbours }
+                                DisplayTreemap { tiles: cells, neighbours }
                             }
                             KeyCode::Left => {
                                 self.left(&neighbours);
-                                Displaying { cells, neighbours }
+                                DisplayTreemap { tiles: cells, neighbours }
                             }
                             KeyCode::Right => {
                                 self.right(&neighbours);
-                                Displaying { cells, neighbours }
+                                DisplayTreemap { tiles: cells, neighbours }
                             }
                             KeyCode::Esc => {
                                 self.go_out();
@@ -272,10 +258,10 @@ impl State {
                             KeyCode::Char('r') => StartScanning,
                             // KeyCode::Char('d') => ConfirmDeleteSelected,
                             KeyCode::Char('q') => Exit,
-                            _ => Displaying { cells, neighbours },
+                            _ => DisplayTreemap { tiles: cells, neighbours },
                         }
                     }
-                    _ => Displaying { cells, neighbours },
+                    _ => DisplayTreemap { tiles: cells, neighbours },
                 }
             }
 
@@ -336,11 +322,11 @@ impl State {
     4. The current cell represents nothing. The most likely case is when the
     current directory is empty. Regardless, this is a no-op.
      */
-    pub fn go_in(&mut self, cells: &Vec<Cell>) {
+    pub fn go_in(&mut self, cells: &Vec<Tile>) {
         let cell = &cells[self.now.selected];
 
-        match &cell.content {
-            CellContent::Inode(inode) => {
+        match &cell.data {
+            TileData::Inode { inode } => {
                 let inode_rc = inode.clone();
 
                 if let InodeDetail::Dir(_) = inode_rc.borrow().detail {
@@ -354,7 +340,7 @@ impl State {
                     self.now = next;
                 }
             }
-            CellContent::Other(OtherCellContent { starting_index, .. }) => {
+            TileData::Other { starting_index, .. } => {
                 let now = self.now.clone();
                 let next = HistoryEntry {
                     directory: self.now.directory.clone(),
@@ -364,7 +350,7 @@ impl State {
                 self.history.push(now);
                 self.now = next;
             }
-            CellContent::Empty => {}
+            TileData::Empty => {}
         }
     }
 
@@ -416,26 +402,31 @@ impl State {
             }
             DeleteSelected => {
                 let index_in_directory = self.now.starting_index + self.now.selected;
-		let current_directory = self.now.directory.borrow();
-		let children = match &(current_directory.detail) {
-		    InodeDetail::Dir(children) => children,
-		    _ => panic!("Delete: Durrent directory is not a directory"),
-		};
-		let child = match children.get(index_in_directory) {
-		    Some(child) => child,
-		    None => todo!(),
-		};
-		let path_to_delete = child.borrow().path.clone();
+                let current_directory = self.now.directory.borrow();
+                let children = match &(current_directory.detail) {
+                    InodeDetail::Dir(children) => children,
+                    _ => panic!(
+                        "delta_delete | DeleteSelected: Durrent \"directory\" is not a directory"
+                    ),
+                };
+                let child = match children.get(index_in_directory) {
+                    Some(child) => child,
+                    None => panic!("delta_delete | DeleteSelected: Cannot find inode to delete"),
+                };
+                let path_to_delete = child.borrow().path.clone();
 
-		let deleted_p = Arc::new(RwLock::new(Ok(false)));
-		let deleted_p_clone = Arc::clone(&deleted_p);
-		let deleting_thread_handle = thread::spawn(move || {
-		    let remove_result = remove_dir_all(path_to_delete);
-		    let remove_result = remove_result.map(|_| true);
-		    *deleted_p_clone.write().unwrap() = remove_result;
-		});
+                let deleted_p = Arc::new(RwLock::new(Ok(false)));
+                let deleted_p_clone = Arc::clone(&deleted_p);
+                let deleting_thread_handle = thread::spawn(move || {
+                    let remove_result = remove_dir_all(path_to_delete);
+                    let remove_result = remove_result.map(|_| true);
+                    *deleted_p_clone.write().unwrap() = remove_result;
+                });
 
-		DeletingSelected { deleted_p, deleting_thread_handle }
+                DeletingSelected {
+                    deleted_p,
+                    deleting_thread_handle,
+                }
             }
             DeletingSelected {
                 deleted_p,
@@ -451,18 +442,52 @@ impl State {
                         deleted_p,
                         deleting_thread_handle,
                     },
-                    Ok(true) => DeletionCleanup,
+                    Ok(true) => {
+                        deleting_thread_handle.join().unwrap();
+                        DeletionCleanup
+                    }
                     Err(_) => DeletionFailed,
                 }
             }
             DeletionFailed => {
-                todo!()
+                use crossterm::event::Event::Key;
+                let event = crossterm::event::read().unwrap();
+                match event {
+                    Key(KeyEvent { .. }) => CalcNewLayout,
+                    _ => DeletionFailed,
+                }
             }
+            /* Clean up
+
+            Remove the logical inode from memory.
+            Modify the history to remain consistent.
+             */
             DeletionCleanup => {
-                todo!()
+                let index_in_directory = self.now.starting_index + self.now.selected;
+                let Inode {
+                    usage,
+                    detail: InodeDetail::Dir(children),
+                    ..
+                } = &mut *self.now.directory.borrow_mut()
+                else {
+                    unreachable!(
+                        "delta_delete | DeletionCleanup: Durrent \"directory\" is not a directory"
+                    )
+                };
+                children.remove(index_in_directory);
+                *usage = children.iter().map(|inode| inode.borrow().usage).sum();
+
+                /* TODO: Is modifying the history stack really necessary?
+
+                Is the state still incoherent?
+                If the state is still coherent, is it possible to enter an
+                incoherent state?
+                 */
+
+                CalcNewLayout
             }
             _ => {
-                panic!("delta_delete: Impossible state {:?}", status);
+                unreachable!("delta_delete: Impossible state {:?}", status);
             }
         }
     }

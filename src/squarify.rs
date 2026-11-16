@@ -13,8 +13,8 @@ pub enum StackDirection {
 
 pub const HEIGHT_TO_WIDTH_RATIO: Measure = 2;
 
-pub const CELL_MIN_WIDTH: Measure = 8;
-pub const CELL_MIN_HEIGHT: Measure = 3;
+pub const TILE_MIN_WIDTH: Measure = 8;
+pub const TILE_MIN_HEIGHT: Measure = 3;
 
 const SPLIT_LEFT_RIGHT_THRESHOLD: Measure = 16;
 const SPLIT_TOP_BOTTOM_THRESHOLD: Measure = 6;
@@ -158,10 +158,10 @@ pub fn squarify(inodes: &[Rc<RefCell<Inode>>], width: Measure, height: Measure) 
         };
     }
 
-    let (cell_min_breadth, cell_min_span) = if is_landscape {
-        (CELL_MIN_WIDTH, CELL_MIN_HEIGHT)
+    let (tile_min_breadth, tile_min_span) = if is_landscape {
+        (TILE_MIN_WIDTH, TILE_MIN_HEIGHT)
     } else {
-        (CELL_MIN_HEIGHT, CELL_MIN_WIDTH)
+        (TILE_MIN_HEIGHT, TILE_MIN_WIDTH)
     };
 
     use StackDirection::*;
@@ -180,7 +180,7 @@ pub fn squarify(inodes: &[Rc<RefCell<Inode>>], width: Measure, height: Measure) 
         &direction,
     );
 
-    if cell_min_breadth <= total_breadth - stack_info.stack_breadth {
+    if tile_min_breadth <= total_breadth - stack_info.stack_breadth {
         while take + 1 <= inodes.len() {
             let candidate_stack_info = calc_stack_info(
                 &inodes[..(take + 1)],
@@ -191,9 +191,9 @@ pub fn squarify(inodes: &[Rc<RefCell<Inode>>], width: Measure, height: Measure) 
             );
 
             let no_space_for_other = take + 1 < inodes.len()
-                && (total_breadth - candidate_stack_info.stack_breadth) < cell_min_breadth;
+                && (total_breadth - candidate_stack_info.stack_breadth) < tile_min_breadth;
             let some_layer_too_short =
-                *candidate_stack_info.stack_spans.iter().min().unwrap() < cell_min_span;
+                *candidate_stack_info.stack_spans.iter().min().unwrap() < tile_min_span;
             let worst_is_worse = stack_info.worst_ratio < candidate_stack_info.worst_ratio;
 
             if no_space_for_other || some_layer_too_short || worst_is_worse {
@@ -206,11 +206,12 @@ pub fn squarify(inodes: &[Rc<RefCell<Inode>>], width: Measure, height: Measure) 
     }
 
     let corrected_stack_breadth = if take == inodes.len() {
-	total_breadth
-
+        total_breadth
     } else {
-	cmp::min(cmp::max(cell_min_breadth, stack_info.stack_breadth),
-		 total_breadth - cell_min_breadth)
+        cmp::min(
+            cmp::max(tile_min_breadth, stack_info.stack_breadth),
+            total_breadth - tile_min_breadth,
+        )
     };
 
     let (sub_width, sub_height) = if is_landscape {
