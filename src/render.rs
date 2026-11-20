@@ -15,7 +15,7 @@ impl Widget for &mut State {
         self.draw_areas = area_to_draw_areas(area);
 
         match &self.status {
-            scanning @ Scanning { .. } => {
+            Scanning { .. } => {
                 self.render_directory_path_block(buf);
                 self.render_blank_entry_name_block(buf);
                 self.render_blank_entry_size_block(buf);
@@ -26,31 +26,36 @@ impl Widget for &mut State {
 		let selected = self.now.selected;
 		let selected_tile = &tiles[selected];
 		self.render_directory_path_block(buf);
-		self.render_entry_name_block(selected_tile.full_name(), buf);
-		self.render_entry_size_block(selected_tile.usage_string(), buf);
+		self.render_entry_name_block(&selected_tile.full_name(), buf);
+		self.render_entry_size_block(&selected_tile.usage_string(), buf);
 		self.render_tiles(tiles, selected, buf);
 		self.render_help_block(buf);
             }
-            DeletionConfirmation { choice } => {
-		todo!("Where are we getting the tiles from?");
-		let selected = self.now.selected;
-		let selected_tile = &tiles[selected];
+            DeletionConfirmation { inode, choice } => {
+		let full_name = inode.borrow().base_name_formatted_string();
 		self.render_directory_path_block(buf);
-		self.render_entry_name_block(selected_tile.full_name(), buf);
-		self.render_entry_size_block(selected_tile.usage_string(), buf);
-		self.render_tiles(tiles, selected, buf);
+		self.render_entry_name_block(&full_name, buf);
+		self.render_blank_entry_size_block(buf);
+		// self.render_tiles(tiles, selected, buf);
 		self.render_help_block(buf);
 
-		self.render_deletion_confirmation_modal(full_name, selection, buf);
-
+		self.render_deletion_confirmation_modal(&full_name, *choice, buf);
             }
-            deleting_selected @ DeletingSelected { .. } => {
-                todo!()
+            DeletingSelected { .. } => {
+		self.render_directory_path_block(buf);
+                self.render_blank_entry_name_block(buf);
+                self.render_blank_entry_size_block(buf);
+		self.render_help_block(buf);
+		self.render_deleting_modal(buf);
             }
             DeletionFailed => {
-                todo!()
+		self.render_directory_path_block(buf);
+                self.render_blank_entry_name_block(buf);
+                self.render_blank_entry_size_block(buf);
+		self.render_help_block(buf);
+		self.render_delete_failure_modal(buf);
             }
-            other => {}
+            _ => {}
         };
     }
 }

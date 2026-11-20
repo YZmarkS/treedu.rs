@@ -40,7 +40,7 @@ impl State {
 	    .render(help_rect, buf);
     }
 
-    pub fn render_entry_name_block(&self, full_name: String, buf: &mut Buffer) {
+    pub fn render_entry_name_block(&self, full_name: &str, buf: &mut Buffer) {
         let DrawAreas {
             entry_name_rect, ..
         } = self.draw_areas;
@@ -50,10 +50,10 @@ impl State {
     }
 
     pub fn render_blank_entry_name_block(&self, buf: &mut Buffer) {
-        self.render_entry_name_block(String::new(), buf);
+        self.render_entry_name_block("", buf);
     }
 
-    pub fn render_entry_size_block(&self, size_string: String, buf: &mut Buffer) {
+    pub fn render_entry_size_block(&self, size_string: &str, buf: &mut Buffer) {
         let DrawAreas {
             entry_size_rect, ..
         } = self.draw_areas;
@@ -63,7 +63,7 @@ impl State {
     }
 
     pub fn render_blank_entry_size_block(&self, buf: &mut Buffer) {
-        self.render_entry_size_block(String::new(), buf);
+        self.render_entry_size_block("", buf);
     }
 
     pub fn render_blank_canvas_block(&self, buf: &mut Buffer) {
@@ -110,7 +110,7 @@ impl State {
 
     pub fn render_deletion_confirmation_modal(
         &self,
-        full_name: String,
+        full_name: &str,
         choice: DeleteChoice,
         buf: &mut Buffer,
     ) {
@@ -133,6 +133,29 @@ impl State {
             .render(message_rect, buf);
 	Paragraph::new("Yes").style(yes_style).render(yes_rect, buf);
 	Paragraph::new("No").style(no_style).render(no_rect, buf);
+    }
+
+    pub fn render_deleting_modal(&self, buf: &mut Buffer) {
+	let DrawAreas { modal_rect, .. } = self.draw_areas;
+        let dots = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            / 250
+            % 4;
+        let deleting_string = format!("Deleting{}", ".".repeat(dots as usize));
+        let modal_text_area = modal_rect.centered(Constraint::Max(12), Constraint::Max(1));
+
+        Block::bordered().render(modal_rect, buf);
+        Paragraph::new(deleting_string).render(modal_text_area, buf);
+    }
+
+    pub fn render_delete_failure_modal(&self, buf: &mut Buffer) {
+	let DrawAreas { modal_rect, .. } = self.draw_areas;
+	let failure_string = format!("Failed to delete {}", "placeholder");
+	let modal_text_area = modal_rect.centered(Constraint::Max(50), Constraint::Max(1));
+	Block::bordered().render(modal_rect, buf);
+	Paragraph::new(failure_string).render(modal_text_area, buf);
     }
 }
 
@@ -218,7 +241,6 @@ fn human_readable_usage(usage: SizeUnit) -> String {
 
 impl TileData {
     pub fn full_name(&self) -> String {
-	todo!("Consider putting this into Inode");
         match self {
             TileData::Inode { inode } => inode.borrow().base_name_formatted_string(),
             TileData::Other { .. } => String::from("More Entries in Directory..."),
@@ -227,7 +249,6 @@ impl TileData {
     }
 
     pub fn usage_string(&self) -> String {
-	todo!("Consider putting this into Inode");
         match self {
             TileData::Inode { inode } => human_readable_usage(inode.clone().borrow().usage),
             TileData::Other { usage, .. } => human_readable_usage(*usage),
@@ -238,17 +259,12 @@ impl TileData {
 
 impl Tile {
     pub fn full_name(&self) -> String {
-	todo!("Consider putting this into Inode");
         self.data.full_name()
     }
     pub fn usage_string(&self) -> String {
-	todo!("Consider putting this into Inode");
         self.data.usage_string()
     }
     pub fn formatted_name(&self) -> String {
-
-	todo!("Consider putting this into Inode");
-
         let internal_width: usize = (self.area.width - 2) as usize;
         match &self.data {
             TileData::Inode { inode } => {

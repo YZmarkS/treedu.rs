@@ -1,7 +1,7 @@
 use crate::{inode::*, layout::*, scanner::*, squarify::*};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::prelude::Rect;
-use std::fs::remove_dir_all;
+use std::fs::{remove_dir_all, remove_file};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -18,7 +18,7 @@ pub struct HistoryEntry {
     pub selected: CellIndex,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum DeleteChoice {
     Yes,
     No,
@@ -40,6 +40,7 @@ pub enum Status {
         neighbours: Vec<Neighbours>,
     },
     DeletionConfirmation {
+        inode: Rc<RefCell<Inode>>,
         choice: DeleteChoice,
     },
     DeleteSelected,
@@ -214,7 +215,7 @@ impl State {
 
             The code is ugly but necessary.
              */
-            DisplayTreemap { tiles: cells, neighbours } => {
+            DisplayTreemap { tiles, neighbours } => {
                 let event = crossterm::event::read().unwrap();
                 match event {
                     Event::Resize(_, _) => CalcNewLayout,
@@ -229,19 +230,19 @@ impl State {
                         match &key_event.code {
                             KeyCode::Up => {
                                 self.up(&neighbours);
-                                DisplayTreemap { tiles: cells, neighbours }
+                                DisplayTreemap { tiles, neighbours }
                             }
                             KeyCode::Down => {
                                 self.down(&neighbours);
-                                DisplayTreemap { tiles: cells, neighbours }
+                                DisplayTreemap { tiles, neighbours }
                             }
                             KeyCode::Left => {
                                 self.left(&neighbours);
-                                DisplayTreemap { tiles: cells, neighbours }
+                                DisplayTreemap { tiles, neighbours }
                             }
                             KeyCode::Right => {
                                 self.right(&neighbours);
-                                DisplayTreemap { tiles: cells, neighbours }
+                                DisplayTreemap { tiles, neighbours }
                             }
                             KeyCode::Esc => {
                                 self.go_out();
@@ -252,16 +253,22 @@ impl State {
                                 CalcNewLayout
                             }
                             KeyCode::Enter => {
-                                self.go_in(&cells);
+                                self.go_in(&tiles);
                                 CalcNewLayout
                             }
                             KeyCode::Char('r') => StartScanning,
-                            // KeyCode::Char('d') => ConfirmDeleteSelected,
+                            KeyCode::Char('d') => match &(tiles[self.now.selected].data) {
+                                TileData::Inode { inode } => DeletionConfirmation {
+                                    inode: inode.clone(),
+                                    choice: DeleteChoice::No,
+                                },
+                                _non_inode => DisplayTreemap { tiles, neighbours },
+                            },
                             KeyCode::Char('q') => Exit,
-                            _ => DisplayTreemap { tiles: cells, neighbours },
+                            _ => DisplayTreemap { tiles, neighbours },
                         }
                     }
-                    _ => DisplayTreemap { tiles: cells, neighbours },
+                    _ => DisplayTreemap { tiles, neighbours },
                 }
             }
 
@@ -384,7 +391,7 @@ impl State {
     fn delta_delete(&mut self, status: Status) -> Status {
         use Status::*;
         match status {
-            DeletionConfirmation { choice } => {
+            DeletionConfirmation { inode, choice } => {
                 use crossterm::event::{
                     Event::Key,
                     KeyCode::{Enter, Left, Right},
@@ -395,9 +402,13 @@ impl State {
                 match (event, choice) {
                     (Key(KeyEvent { code: Enter, .. }), Yes) => DeleteSelected,
                     (Key(KeyEvent { code: Enter, .. }), No) => CalcNewLayout,
-                    (Key(KeyEvent { code: Left, .. }), _) => DeletionConfirmation { choice: Yes },
-                    (Key(KeyEvent { code: Right, .. }), _) => DeletionConfirmation { choice: No },
-                    (_, choice) => DeletionConfirmation { choice },
+                    (Key(KeyEvent { code: Left, .. }), _) => {
+                        DeletionConfirmation { inode, choice: Yes }
+                    }
+                    (Key(KeyEvent { code: Right, .. }), _) => {
+                        DeletionConfirmation { inode, choice: No }
+                    }
+                    (_, choice) => DeletionConfirmation { inode, choice },
                 }
             }
             DeleteSelected => {
@@ -417,11 +428,18 @@ impl State {
 
                 let deleted_p = Arc::new(RwLock::new(Ok(false)));
                 let deleted_p_clone = Arc::clone(&deleted_p);
-                let deleting_thread_handle = thread::spawn(move || {
-                    let remove_result = remove_dir_all(path_to_delete);
-                    let remove_result = remove_result.map(|_| true);
-                    *deleted_p_clone.write().unwrap() = remove_result;
-                });
+                let deleting_thread_handle = match child.borrow().detail {
+                    InodeDetail::Dir(_) => thread::spawn(move || {
+                        let remove_result = remove_dir_all(path_to_delete);
+                        let remove_result = remove_result.map(|_| true);
+                        *deleted_p_clone.write().unwrap() = remove_result;
+                    }),
+                    InodeDetail::Reg | InodeDetail::Sym => thread::spawn(move || {
+                        let remove_result = remove_file(path_to_delete);
+                        let remove_result = remove_result.map(|_| true);
+                        *deleted_p_clone.write().unwrap() = remove_result;
+                    }),
+                };
 
                 DeletingSelected {
                     deleted_p,
@@ -432,21 +450,22 @@ impl State {
                 deleted_p,
                 deleting_thread_handle,
             } => {
-                let status = match *deleted_p.read().unwrap() {
+                let status_ref = deleted_p.read().unwrap();
+                let status = match status_ref.as_ref() {
                     Ok(b) => Ok(b),
-                    Err(_) => Err(()),
+                    Err(e) => Err(()),
                 };
 
                 match status {
                     Ok(false) => DeletingSelected {
-                        deleted_p,
+                        deleted_p: deleted_p.clone(),
                         deleting_thread_handle,
                     },
                     Ok(true) => {
                         deleting_thread_handle.join().unwrap();
                         DeletionCleanup
                     }
-                    Err(_) => DeletionFailed,
+                    Err(()) => DeletionFailed,
                 }
             }
             DeletionFailed => {
