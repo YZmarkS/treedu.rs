@@ -1,6 +1,7 @@
 use crate::{inode::*, layout::*, scanner::*, squarify::*};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::prelude::Rect;
+use std::fs::{remove_dir_all, remove_file};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -8,6 +9,7 @@ use std::time::Duration;
 use std::{cell::RefCell, sync::*, thread};
 
 type CellIndex = usize;
+type Deleted = bool;
 
 #[derive(Clone)]
 pub struct HistoryEntry {
@@ -16,19 +18,13 @@ pub struct HistoryEntry {
     pub selected: CellIndex,
 }
 
-pub struct DisplayingContext {
-    pub info_bar: Rect,
-    pub cells: Vec<Cell>,
-    pub neighbours: Vec<Neighbours>,
-    pub help_bar: Rect,
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum DeleteChoice {
+    Yes,
+    No,
 }
 
-pub struct NewLayoutContext {
-    pub info_bar: Rect,
-    pub canvas: Rect,
-    pub help_bar: Rect,
-}
-
+#[derive(Debug)]
 pub enum Status {
     Exit,
     Swapping,
@@ -38,16 +34,31 @@ pub enum Status {
         scanning_thread_handle: JoinHandle<()>,
     },
     ReturnToHeadOfCurrentDirectory,
-    GetCanvasSize,
-    CalcNewLayout(NewLayoutContext),
-    Displaying(DisplayingContext),
-    ConfirmDeleteSelected,
+    CalcNewLayout,
+    DisplayTreemap {
+        tiles: Vec<Tile>,
+        neighbours: Vec<Neighbours>,
+    },
+    DeletionConfirmation {
+        inode: Rc<RefCell<Inode>>,
+        choice: DeleteChoice,
+    },
     DeleteSelected,
     DeletingSelected {
-        deleted: Arc<RwLock<bool>>,
+        deleted_p: Arc<RwLock<std::io::Result<Deleted>>>,
+        deleting_thread_handle: JoinHandle<()>,
     },
     DeletionFailed,
     DeletionCleanup,
+}
+
+pub struct DrawAreas {
+    pub directory_path_rect: Rect,
+    pub entry_name_rect: Rect,
+    pub entry_size_rect: Rect,
+    pub canvas: Rect,
+    pub help_rect: Rect,
+    pub modal_rect: Rect,
 }
 
 pub struct State {
@@ -59,6 +70,8 @@ pub struct State {
 
     pub history: Vec<HistoryEntry>,
     pub now: HistoryEntry,
+
+    pub draw_areas: DrawAreas,
 }
 
 impl State {
@@ -144,7 +157,7 @@ impl State {
             external forces or internally through app), the previously selected
             element becomes unavailable. Thus, it is crucial to recover from an
             inconsistent state after (re)scanning or file deletion.
-                 */
+             */
             ReturnToHeadOfCurrentDirectory => {
                 let curr_directory = self.now.directory.clone();
                 while self.history.last().is_some_and(|entry| {
@@ -156,7 +169,7 @@ impl State {
                 self.now.selected = 0;
                 self.now.starting_index = 0;
 
-                GetCanvasSize
+                CalcNewLayout
             }
 
             /* Getting terminal dimension for Layout Calculation
@@ -165,18 +178,12 @@ impl State {
             While [crossterm] provides some interface for getting the terminal
             dimension, I want one source of truth, and is currently using the
              */
-            GetCanvasSize => {
-                panic!("GetCanvasSize: Status should not be possible after draw");
-            }
-
-            CalcNewLayout(NewLayoutContext {
-                info_bar,
-                canvas,
-                help_bar,
-            }) => {
+            CalcNewLayout => {
                 let InodeDetail::Dir(children) = &(self.now.directory.borrow().detail) else {
                     panic!("CalcNewLayout: Current inode is not a directory");
                 };
+
+                let DrawAreas { canvas, .. } = self.draw_areas;
 
                 let squarify = squarify(
                     &children[self.now.starting_index..],
@@ -185,37 +192,21 @@ impl State {
                     canvas.height - 1,
                 );
                 let rects = squarify_to_rects(&squarify, canvas);
-                let cells = make_cell_list(&rects, children, self.now.starting_index);
-                let neighbours = make_neighbours(&cells);
+                let tiles = make_tiles(&rects, children, self.now.starting_index);
+                let neighbours = make_neighbours(&tiles);
 
-                Displaying(DisplayingContext {
-                    info_bar,
-                    cells,
-                    neighbours,
-                    help_bar,
-                })
+                DisplayTreemap { tiles, neighbours }
             }
 
-            /* Delete Selected */
-            ConfirmDeleteSelected => {
-                todo!()
-            }
-            DeleteSelected => {
-                todo!()
-            }
-            DeletingSelected { deleted } => {
-                if *(deleted.read().unwrap()) {
-                    DeletionCleanup
-                } else {
-                    DeletingSelected { deleted }
-                }
-            }
-            DeletionFailed => {
-                todo!()
-            }
-            DeletionCleanup => {
-                todo!()
-            }
+            /* Delete Selected
+
+            Simple business logic, but many house keeping
+             */
+            status @ (DeletionConfirmation { .. }
+            | DeleteSelected
+            | DeletingSelected { .. }
+            | DeletionFailed
+            | DeletionCleanup) => self.delta_delete(status),
 
             /* Displaying and Waiting for User Input
 
@@ -224,89 +215,60 @@ impl State {
 
             The code is ugly but necessary.
              */
-            Displaying(DisplayingContext {
-                info_bar,
-                cells,
-                neighbours,
-                help_bar,
-            }) => {
+            DisplayTreemap { tiles, neighbours } => {
                 let event = crossterm::event::read().unwrap();
                 match event {
-                    Event::Resize(_, _) => GetCanvasSize,
-		    /* Key Event Duplication
+                    Event::Resize(_, _) => CalcNewLayout,
+                    /* Key Event Duplication
 
-		    Known [crossterm] issue. The default key press event is [Press].
-		    - Official documentation: https://docs.rs/crossterm/latest/crossterm/event/struct.KeyEvent.html#structfield.kind
-		    - Double key input on Windows: https://github.com/crossterm-rs/crossterm/issues/772
-		    - Proposal to make release event opt-in: https://github.com/crossterm-rs/crossterm/pull/778
-		     */
+                    Known [crossterm] issue. The default key press event is [Press].
+                    - Official documentation: https://docs.rs/crossterm/latest/crossterm/event/struct.KeyEvent.html#structfield.kind
+                    - Double key input on Windows: https://github.com/crossterm-rs/crossterm/issues/772
+                    - Proposal to make release event opt-in: https://github.com/crossterm-rs/crossterm/pull/778
+                     */
                     Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                         match &key_event.code {
                             KeyCode::Up => {
                                 self.up(&neighbours);
-                                Displaying(DisplayingContext {
-                                    info_bar,
-                                    cells,
-                                    neighbours,
-                                    help_bar,
-                                })
+                                DisplayTreemap { tiles, neighbours }
                             }
                             KeyCode::Down => {
                                 self.down(&neighbours);
-                                Displaying(DisplayingContext {
-                                    info_bar,
-                                    cells,
-                                    neighbours,
-                                    help_bar,
-                                })
+                                DisplayTreemap { tiles, neighbours }
                             }
                             KeyCode::Left => {
                                 self.left(&neighbours);
-                                Displaying(DisplayingContext {
-                                    info_bar,
-                                    cells,
-                                    neighbours,
-                                    help_bar,
-                                })
+                                DisplayTreemap { tiles, neighbours }
                             }
                             KeyCode::Right => {
                                 self.right(&neighbours);
-                                Displaying(DisplayingContext {
-                                    info_bar,
-                                    cells,
-                                    neighbours,
-                                    help_bar,
-                                })
+                                DisplayTreemap { tiles, neighbours }
                             }
                             KeyCode::Esc => {
                                 self.go_out();
-                                GetCanvasSize
+                                CalcNewLayout
                             }
                             KeyCode::Backspace => {
                                 self.go_out();
-                                GetCanvasSize
+                                CalcNewLayout
                             }
                             KeyCode::Enter => {
-                                self.go_in(&cells);
-                                GetCanvasSize
+                                self.go_in(&tiles);
+                                CalcNewLayout
                             }
                             KeyCode::Char('r') => StartScanning,
-                            // KeyCode::Char('d') => ConfirmDeleteSelected,
+                            KeyCode::Char('d') => match &(tiles[self.now.selected].data) {
+                                TileData::Inode { inode } => DeletionConfirmation {
+                                    inode: inode.clone(),
+                                    choice: DeleteChoice::No,
+                                },
+                                _non_inode => DisplayTreemap { tiles, neighbours },
+                            },
                             KeyCode::Char('q') => Exit,
-                            _ => Displaying(DisplayingContext {
-                                info_bar,
-                                cells,
-                                neighbours,
-                                help_bar,
-                            }),
+                            _ => DisplayTreemap { tiles, neighbours },
                         }
                     }
-                    _ => Displaying(DisplayingContext {
-                        info_bar,
-                        cells,
-                        neighbours,
-                        help_bar,
-                    }),
+                    _ => DisplayTreemap { tiles, neighbours },
                 }
             }
 
@@ -367,11 +329,11 @@ impl State {
     4. The current cell represents nothing. The most likely case is when the
     current directory is empty. Regardless, this is a no-op.
      */
-    pub fn go_in(&mut self, cells: &Vec<Cell>) {
+    pub fn go_in(&mut self, cells: &Vec<Tile>) {
         let cell = &cells[self.now.selected];
 
-        match &cell.content {
-            CellContent::Inode(inode) => {
+        match &cell.data {
+            TileData::Inode { inode } => {
                 let inode_rc = inode.clone();
 
                 if let InodeDetail::Dir(_) = inode_rc.borrow().detail {
@@ -385,7 +347,7 @@ impl State {
                     self.now = next;
                 }
             }
-            CellContent::Other(OtherCellContent { starting_index, .. }) => {
+            TileData::Other { starting_index, .. } => {
                 let now = self.now.clone();
                 let next = HistoryEntry {
                     directory: self.now.directory.clone(),
@@ -395,7 +357,7 @@ impl State {
                 self.history.push(now);
                 self.now = next;
             }
-            CellContent::Empty => {}
+            TileData::Empty => {}
         }
     }
 
@@ -424,5 +386,128 @@ impl State {
         *usage = children.iter().map(|inode| inode.borrow().usage).sum();
         children.sort_by_key(|inode| inode.borrow().usage);
         children.reverse();
+    }
+
+    fn delta_delete(&mut self, status: Status) -> Status {
+        use Status::*;
+        match status {
+            DeletionConfirmation { inode, choice } => {
+                use crossterm::event::{
+                    Event::Key,
+                    KeyCode::{Enter, Left, Right},
+                };
+                use DeleteChoice::*;
+
+                let event = crossterm::event::read().unwrap();
+                match (event, choice) {
+                    (Key(KeyEvent { code: Enter, .. }), Yes) => DeleteSelected,
+                    (Key(KeyEvent { code: Enter, .. }), No) => CalcNewLayout,
+                    (Key(KeyEvent { code: Left, .. }), _) => {
+                        DeletionConfirmation { inode, choice: Yes }
+                    }
+                    (Key(KeyEvent { code: Right, .. }), _) => {
+                        DeletionConfirmation { inode, choice: No }
+                    }
+                    (_, choice) => DeletionConfirmation { inode, choice },
+                }
+            }
+            DeleteSelected => {
+                let index_in_directory = self.now.starting_index + self.now.selected;
+                let current_directory = self.now.directory.borrow();
+                let children = match &(current_directory.detail) {
+                    InodeDetail::Dir(children) => children,
+                    _ => panic!(
+                        "delta_delete | DeleteSelected: Durrent \"directory\" is not a directory"
+                    ),
+                };
+                let child = match children.get(index_in_directory) {
+                    Some(child) => child,
+                    None => panic!("delta_delete | DeleteSelected: Cannot find inode to delete"),
+                };
+                let path_to_delete = child.borrow().path.clone();
+
+                let deleted_p = Arc::new(RwLock::new(Ok(false)));
+                let deleted_p_clone = Arc::clone(&deleted_p);
+                let deleting_thread_handle = match child.borrow().detail {
+                    InodeDetail::Dir(_) => thread::spawn(move || {
+                        let remove_result = remove_dir_all(path_to_delete);
+                        let remove_result = remove_result.map(|_| true);
+                        *deleted_p_clone.write().unwrap() = remove_result;
+                    }),
+                    InodeDetail::Reg | InodeDetail::Sym => thread::spawn(move || {
+                        let remove_result = remove_file(path_to_delete);
+                        let remove_result = remove_result.map(|_| true);
+                        *deleted_p_clone.write().unwrap() = remove_result;
+                    }),
+                };
+
+                DeletingSelected {
+                    deleted_p,
+                    deleting_thread_handle,
+                }
+            }
+            DeletingSelected {
+                deleted_p,
+                deleting_thread_handle,
+            } => {
+                let status_ref = deleted_p.read().unwrap();
+                let status = match status_ref.as_ref() {
+                    Ok(b) => Ok(b),
+                    Err(e) => Err(()),
+                };
+
+                match status {
+                    Ok(false) => DeletingSelected {
+                        deleted_p: deleted_p.clone(),
+                        deleting_thread_handle,
+                    },
+                    Ok(true) => {
+                        deleting_thread_handle.join().unwrap();
+                        DeletionCleanup
+                    }
+                    Err(()) => DeletionFailed,
+                }
+            }
+            DeletionFailed => {
+                use crossterm::event::Event::Key;
+                let event = crossterm::event::read().unwrap();
+                match event {
+                    Key(KeyEvent { .. }) => CalcNewLayout,
+                    _ => DeletionFailed,
+                }
+            }
+            /* Clean up
+
+            Remove the logical inode from memory.
+            Modify the history to remain consistent.
+             */
+            DeletionCleanup => {
+                let index_in_directory = self.now.starting_index + self.now.selected;
+                let Inode {
+                    usage,
+                    detail: InodeDetail::Dir(children),
+                    ..
+                } = &mut *self.now.directory.borrow_mut()
+                else {
+                    unreachable!(
+                        "delta_delete | DeletionCleanup: Durrent \"directory\" is not a directory"
+                    )
+                };
+                children.remove(index_in_directory);
+                *usage = children.iter().map(|inode| inode.borrow().usage).sum();
+
+                /* TODO: Is modifying the history stack really necessary?
+
+                Is the state still incoherent?
+                If the state is still coherent, is it possible to enter an
+                incoherent state?
+                 */
+
+                CalcNewLayout
+            }
+            _ => {
+                unreachable!("delta_delete: Impossible state {:?}", status);
+            }
+        }
     }
 }

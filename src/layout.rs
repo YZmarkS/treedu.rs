@@ -1,4 +1,4 @@
-use ratatui::{layout::*};
+use ratatui::layout::*;
 use std::{cell::RefCell, cmp, collections::HashMap, rc::Rc};
 
 use crate::inode::*;
@@ -88,71 +88,78 @@ fn calc_offset((low1, high1): (Measure, Measure), (low2, high2): (Measure, Measu
     (mid2 - mid1).abs()
 }
 
-pub struct Cell {
-    pub rect: Rect,
-    pub content: CellContent,
+#[derive(Debug)]
+pub struct Tile {
+    pub area: Rect,
+    pub data: TileData,
 }
 
-pub enum CellContent {
-    Inode(Rc<RefCell<Inode>>),
-    Other(OtherCellContent),
+#[derive(Debug)]
+pub enum TileData {
+    Inode {
+        inode: Rc<RefCell<Inode>>,
+    },
+    Other {
+        starting_index: usize,
+        usage: SizeUnit,
+    },
     Empty,
 }
 
-pub struct OtherCellContent {
-    pub starting_index: usize,
-    pub usage: SizeUnit,
-}
+pub type TileIndex = usize;
 
-pub type CellId = usize;
-
+#[derive(Debug)]
 pub struct Neighbours {
-    pub top: Option<CellId>,
-    pub bottom: Option<CellId>,
-    pub left: Option<CellId>,
-    pub right: Option<CellId>,
+    pub top: Option<TileIndex>,
+    pub bottom: Option<TileIndex>,
+    pub left: Option<TileIndex>,
+    pub right: Option<TileIndex>,
 }
 
-pub fn make_cell_list(
+pub fn make_tiles(
     rects: &Vec<Rect>,
     inodes: &Vec<Rc<RefCell<Inode>>>,
     starting_index: usize,
-) -> Vec<Cell> {
+) -> Vec<Tile> {
     assert!(0 < rects.len());
-    use CellContent::*;
-    let mut cells: Vec<Cell> = Vec::new();
+    use TileData::*;
+    let mut tiles: Vec<Tile> = Vec::new();
     if inodes.len() <= starting_index {
-        cells.push(Cell {
-            rect: rects[0],
-            content: Empty,
+        tiles.push(Tile {
+            area: rects[0],
+            data: Empty,
         });
-        return cells;
+        return tiles;
     }
 
     for i in 0..(rects.len() - 1) {
-        cells.push(Cell {
-            rect: rects[i].to_owned(),
-            content: Inode(inodes[starting_index + i].clone()),
+        tiles.push(Tile {
+            area: rects[i].to_owned(),
+            data: Inode {
+                inode: inodes[starting_index + i].clone(),
+            },
         });
     }
-    cells.push(Cell {
-        rect: rects[rects.len() - 1].to_owned(),
-        content: if starting_index + rects.len() == inodes.len() {
-            Inode(inodes[starting_index + rects.len() - 1].clone())
+    tiles.push(Tile {
+        area: rects[rects.len() - 1].to_owned(),
+        data: if starting_index + rects.len() == inodes.len() {
+            Inode {
+                inode: inodes[starting_index + rects.len() - 1].clone(),
+            }
         } else {
-            Other(OtherCellContent {
+            Other {
                 starting_index: starting_index + rects.len() - 1,
                 usage: inodes[starting_index + rects.len() - 1..]
                     .iter()
                     .map(|inode| inode.borrow().usage)
                     .sum(),
-            })
+            }
         },
     });
-    cells
+    tiles
 }
 
-type CellIdByCoord = HashMap<Measure, Vec<CellId>>;
+type TileIndexByCoord = HashMap<Measure, Vec<TileIndex>>;
 
 fn push_by_key<K: Eq + core::hash::Hash, V>(map: &mut HashMap<K, Vec<V>>, key: K, value: V) {
     if map.contains_key(&key) {
@@ -167,13 +174,13 @@ enum Ends {
     LeftRight,
 }
 
-fn group_by_endpoint(cells: &Vec<Cell>, ends_to_group_by: Ends) -> (CellIdByCoord, CellIdByCoord) {
+fn group_by_endpoint(tiles: &Vec<Tile>, ends_to_group_by: Ends) -> (TileIndexByCoord, TileIndexByCoord) {
     let (mut by_low, mut by_high) = (HashMap::new(), HashMap::new());
 
-    for i in 0..(cells.len()) {
+    for i in 0..(tiles.len()) {
         let (low, high) = match ends_to_group_by {
-            Ends::TopBottom => y_interval(cells[i].rect),
-            Ends::LeftRight => x_interval(cells[i].rect),
+            Ends::TopBottom => y_interval(tiles[i].area),
+            Ends::LeftRight => x_interval(tiles[i].area),
         };
         push_by_key(&mut by_low, low, i);
         push_by_key(&mut by_high, high, i);
@@ -183,30 +190,30 @@ fn group_by_endpoint(cells: &Vec<Cell>, ends_to_group_by: Ends) -> (CellIdByCoor
 }
 
 fn find_most_overlapping(
-    cells: &Vec<Cell>,
-    candidates: Option<&Vec<CellId>>,
-    cell: &Cell,
+    tiles: &Vec<Tile>,
+    candidates: Option<&Vec<TileIndex>>,
+    tile: &Tile,
     ends_to_compare_by: Ends,
-) -> Option<CellId> {
+) -> Option<TileIndex> {
     let candidates = candidates?;
 
     let mut best_candidate = None;
     let mut best_overlap = -1;
     let mut best_offset = i32::MAX;
 
-    let cell_interval = match ends_to_compare_by {
-        Ends::TopBottom => y_interval(cell.rect),
-        Ends::LeftRight => x_interval(cell.rect),
+    let tile_interval = match ends_to_compare_by {
+        Ends::TopBottom => y_interval(tile.area),
+        Ends::LeftRight => x_interval(tile.area),
     };
 
     for candidate in candidates {
         let candidate_interval = match ends_to_compare_by {
-            Ends::TopBottom => y_interval(cells[*candidate].rect),
-            Ends::LeftRight => x_interval(cells[*candidate].rect),
+            Ends::TopBottom => y_interval(tiles[*candidate].area),
+            Ends::LeftRight => x_interval(tiles[*candidate].area),
         };
 
-        let overlap = calc_overlap(candidate_interval, cell_interval);
-        let offset = calc_offset(candidate_interval, cell_interval);
+        let overlap = calc_overlap(candidate_interval, tile_interval);
+        let offset = calc_offset(candidate_interval, tile_interval);
 
         if best_overlap < overlap {
             best_overlap = overlap;
@@ -219,25 +226,25 @@ fn find_most_overlapping(
     best_candidate
 }
 
-pub fn make_neighbours(cells: &Vec<Cell>) -> Vec<Neighbours> {
+pub fn make_neighbours(tiles: &Vec<Tile>) -> Vec<Neighbours> {
     use Ends::*;
     let mut neighbours = Vec::new();
 
-    let (by_top, by_bottom) = group_by_endpoint(cells, TopBottom);
-    let (by_left, by_right) = group_by_endpoint(cells, LeftRight);
+    let (by_top, by_bottom) = group_by_endpoint(tiles, TopBottom);
+    let (by_left, by_right) = group_by_endpoint(tiles, LeftRight);
 
-    for cell in cells.iter() {
-        let (top, bottom) = y_interval(cell.rect);
-        let (left, right) = x_interval(cell.rect);
+    for tile in tiles.iter() {
+        let (top, bottom) = y_interval(tile.area);
+        let (left, right) = x_interval(tile.area);
 
         let top_neighbour =
-            find_most_overlapping(cells, by_bottom.get(&(top + 1)), cell, LeftRight);
+            find_most_overlapping(tiles, by_bottom.get(&(top + 1)), tile, LeftRight);
         let bottom_neighbour =
-            find_most_overlapping(cells, by_top.get(&(bottom - 1)), cell, LeftRight);
+            find_most_overlapping(tiles, by_top.get(&(bottom - 1)), tile, LeftRight);
         let left_neighbour =
-            find_most_overlapping(cells, by_right.get(&(left + 1)), cell, TopBottom);
+            find_most_overlapping(tiles, by_right.get(&(left + 1)), tile, TopBottom);
         let right_neighbour =
-            find_most_overlapping(cells, by_left.get(&(right - 1)), cell, TopBottom);
+            find_most_overlapping(tiles, by_left.get(&(right - 1)), tile, TopBottom);
 
         neighbours.push(Neighbours {
             top: top_neighbour,
