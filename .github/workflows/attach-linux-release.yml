@@ -13,19 +13,19 @@ jobs:
     strategy:
       matrix:
         includes:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+          - os: "ubuntu-latest"
+            target: "x86_64-unknown-linux-gnu"
             executable_suffix: ""
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+          - os: "ubuntu-24.04-arm"
+            target: "aarch64-unknown-linux-gnu"
             executable_suffix: ""
-          - os: windows-latest
+          - os: "windows-latest"
             executable_suffix: ".exe"
-          - os: windows-11-arm
+          - os: "windows-11-arm"
             executable_suffix: ".exe"
-          - os: macos-latest
+          - os: "macos-latest"
             executable_suffix: ""
-          - os: macos-15-intel
+          - os: "macos-15-intel"
             executable_suffix: ""
 
     runs-on: ${{ matrix.os }}
