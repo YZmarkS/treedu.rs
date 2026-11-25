@@ -60,9 +60,18 @@ jobs:
         if: ${{ matrix.target != null }}
         run: "cargo build --profile release --target=${{ matrix.target }}"
         
-      - name: "Upload: Upload to release"
+      - name: "Upload: Upload native executable to release"
+        if: ${{ matrix.target == null }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp target/release/treedu treedu-${{ matrix.os }}${{ matrix.executable_suffix }}
+          gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_suffix }} --clobber
+
+      - name: "Upload: Upload ${{ matrix.target }} target to release"
+        if: ${{ matrix.target != null }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp target/${{ matrix.target }}/release/treedu treedu-${{ matrix.os }}${{ matrix.executable_suffix }}
           gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_suffix }} --clobber
