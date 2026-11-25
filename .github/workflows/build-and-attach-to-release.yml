@@ -1,5 +1,5 @@
-name: Attach Linux Release
-run-name: Attach Linux Build to Release
+name: Build and Attach to Release
+run-name: Build for and attach executable to release.
 on:
   workflow_dispatch:
     inputs:
