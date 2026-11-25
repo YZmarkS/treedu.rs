@@ -15,18 +15,18 @@ jobs:
         include:
           - os: "ubuntu-latest"
             target: "x86_64-unknown-linux-gnu"
-            executable_suffix: ""
+            executable_extension: ""
           - os: "ubuntu-24.04-arm"
             target: "aarch64-unknown-linux-gnu"
-            executable_suffix: ""
+            executable_extension: ""
           - os: "windows-latest"
-            executable_suffix: ".exe"
+            executable_extension: ".exe"
           - os: "windows-11-arm"
-            executable_suffix: ".exe"
+            executable_extension: ".exe"
           - os: "macos-latest"
-            executable_suffix: ""
+            executable_extension: ""
           - os: "macos-15-intel"
-            executable_suffix: ""
+            executable_extension: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -65,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp target/release/treedu treedu-${{ matrix.os }}${{ matrix.executable_suffix }}
-          gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_suffix }} --clobber
+          cp target/release/treedu treedu-${{ matrix.os }}${{ matrix.executable_extension }}
+          gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_extension }} --clobber
 
       - name: "Upload: Upload ${{ matrix.target }} target to release"
         if: ${{ matrix.target != null }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp target/${{ matrix.target }}/release/treedu treedu-${{ matrix.os }}${{ matrix.executable_suffix }}
-          gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_suffix }} --clobber
+          cp target/${{ matrix.target }}/release/treedu${{ matrix.executable_extension }} treedu-${{ matrix.os }}${{ matrix.executable_extension }}
+          gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_extension }} --clobber
