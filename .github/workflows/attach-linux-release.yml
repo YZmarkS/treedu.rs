@@ -65,7 +65,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp target/release/treedu treedu-${{ matrix.os }}${{ matrix.executable_extension }}
+          cp target/release/treedu${{ matrix.executable_extension }} treedu-${{ matrix.os }}${{ matrix.executable_extension }}
           gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_extension }} --clobber
 
       - name: "Upload: Upload ${{ matrix.target }} target to release"
