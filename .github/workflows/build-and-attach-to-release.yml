@@ -15,17 +15,23 @@ jobs:
         include:
           - os: "ubuntu-latest"
             target: "x86_64-unknown-linux-gnu"
+            executable_name: "linux"
             executable_extension: ""
           - os: "ubuntu-24.04-arm"
             target: "aarch64-unknown-linux-gnu"
+            executable_name: "linux"
             executable_extension: ""
           - os: "windows-latest"
+            executable_name: "windows"
             executable_extension: ".exe"
           - os: "windows-11-arm"
+            executable_name: "windows"
             executable_extension: ".exe"
           - os: "macos-latest"
+            executable_name: "macos"
             executable_extension: ""
           - os: "macos-15-intel"
+            executable_name: "macos"
             executable_extension: ""
 
     runs-on: ${{ matrix.os }}
@@ -65,13 +71,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp target/release/treedu${{ matrix.executable_extension }} treedu-${{ matrix.os }}${{ matrix.executable_extension }}
-          gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_extension }} --clobber
+          cp target/release/treedu${{ matrix.executable_extension }} treedu-${{ matrix.executable_name }}${{ matrix.executable_extension }}
+          gh release upload ${{ inputs.tag }} treedu-${{ matrix.executable_name }}${{ matrix.executable_extension }} --clobber
 
       - name: "Upload: Upload ${{ matrix.target }} target to release"
         if: ${{ matrix.target != null }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp target/${{ matrix.target }}/release/treedu${{ matrix.executable_extension }} treedu-${{ matrix.os }}${{ matrix.executable_extension }}
-          gh release upload ${{ inputs.tag }} treedu-${{ matrix.os }}${{ matrix.executable_extension }} --clobber
+          cp target/${{ matrix.target }}/release/treedu${{ matrix.executable_extension }} treedu-${{ matrix.executable_name }}${{ matrix.executable_extension }}
+          gh release upload ${{ inputs.tag }} treedu-${{ matrix.executable_name }}${{ matrix.executable_extension }} --clobber
