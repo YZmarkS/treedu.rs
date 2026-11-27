@@ -1,8 +1,5 @@
 use ratatui::{
-    layout::{Constraint, Flex, Layout, Spacing},
-    prelude::*,
-    symbols::merge::MergeStrategy,
-    widgets::{Block, Padding, Paragraph},
+    layout::{Constraint, Flex, Layout, Spacing}, prelude::*, symbols::merge::MergeStrategy, widgets::{Block, Borders, Padding, Paragraph},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -134,6 +131,16 @@ impl Store {
             ),
             no_rect.centered(Constraint::Length("No".len() as u16), Constraint::Length(1)),
         );
+        let (yes_bg_rect, no_bg_rect) = (
+            yes_span_rect.outer(Margin {
+                horizontal: 2,
+                vertical: 1,
+            }),
+            no_span_rect.outer(Margin {
+                horizontal: 2,
+                vertical: 1,
+            }),
+        );
 
         modal_block.render(modal_rect, buf);
 
@@ -143,12 +150,14 @@ impl Store {
         ))
         .render(message_rect, buf);
 
-        let (yes_style, no_style) = match choice {
-            DeleteChoice::Yes => (SELECTED_STYLE, UNSELECTED_STYLE),
-            DeleteChoice::No => (UNSELECTED_STYLE, SELECTED_STYLE),
+        let (yes_border, no_border) = match choice {
+            DeleteChoice::Yes => (Borders::all(), Borders::empty()),
+            DeleteChoice::No => (Borders::empty(), Borders::all()),
         };
-        Span::styled("Yes", yes_style).render(yes_span_rect, buf);
-        Span::styled("No", no_style).render(no_span_rect, buf);
+	Block::new().borders(yes_border).render(yes_bg_rect, buf);
+	Block::new().borders(no_border).render(no_bg_rect, buf);
+	Span::raw("Yes").render(yes_span_rect, buf);
+        Span::raw("No").render(no_span_rect, buf);
     }
 
     pub fn render_delete_in_progress_modal(&self, buf: &mut Buffer) {
