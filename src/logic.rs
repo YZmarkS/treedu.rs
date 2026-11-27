@@ -463,7 +463,7 @@ impl Store {
                         inode,
                         state: Confirmation { choice: No },
                     },
-		    (
+                    (
                         Key(KeyEvent {
                             code: KeyCode::Char('q'),
                             kind: Press,
@@ -574,7 +574,12 @@ impl Store {
                         "delta_delete | DeletionCleanup: Durrent \"directory\" is not a directory"
                     )
                 };
+                let children_count = children.len();
                 children.remove(index_in_directory);
+                if index_in_directory + 1 == children_count && 0 < self.now.selected {
+                    self.now.selected -= 1;
+                }
+
                 *usage = children.iter().map(|inode| inode.borrow().usage).sum();
 
                 /* TODO: Is modifying the history stack really necessary?
