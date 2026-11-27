@@ -1,5 +1,5 @@
 use crate::{inode::*, layout::*, scanner::*, squarify::*};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent};
 use ratatui::prelude::Rect;
 use std::fs::{remove_dir_all, remove_file};
 use std::path::PathBuf;
@@ -25,7 +25,21 @@ pub enum DeleteChoice {
 }
 
 #[derive(Debug)]
-pub enum Status {
+pub enum DeleteState {
+    Confirmation {
+        choice: DeleteChoice,
+    },
+    Start,
+    InProgress {
+        deleted_p: Arc<RwLock<std::io::Result<Deleted>>>,
+        deleting_thread_handle: JoinHandle<()>,
+    },
+    Failed,
+    Cleanup,
+}
+
+#[derive(Debug)]
+pub enum State {
     Exit,
     Swapping,
     StartScanning,
@@ -39,17 +53,21 @@ pub enum Status {
         tiles: Vec<Tile>,
         neighbours: Vec<Neighbours>,
     },
-    DeletionConfirmation {
+    Delete {
         inode: Rc<RefCell<Inode>>,
-        choice: DeleteChoice,
+        state: DeleteState,
     },
-    DeleteSelected,
-    DeletingSelected {
-        deleted_p: Arc<RwLock<std::io::Result<Deleted>>>,
-        deleting_thread_handle: JoinHandle<()>,
-    },
-    DeletionFailed,
-    DeletionCleanup,
+    // DeletionConfirmation {
+    //     inode: Rc<RefCell<Inode>>,
+    //     choice: DeleteChoice,
+    // },
+    // DeleteSelected,
+    // DeletingSelected {
+    //     deleted_p: Arc<RwLock<std::io::Result<Deleted>>>,
+    //     deleting_thread_handle: JoinHandle<()>,
+    // },
+    // DeletionFailed,
+    // DeletionCleanup,
 }
 
 pub struct DrawAreas {
@@ -61,8 +79,8 @@ pub struct DrawAreas {
     pub modal_rect: Rect,
 }
 
-pub struct State {
-    pub status: Status,
+pub struct Store {
+    pub status: State,
     pub root_path: PathBuf,
     pub worker_pool_size: usize,
 
@@ -74,9 +92,9 @@ pub struct State {
     pub draw_areas: DrawAreas,
 }
 
-impl State {
-    pub fn delta(&mut self, status: Status) -> Status {
-        use Status::*;
+impl Store {
+    pub fn delta(&mut self, status: State) -> State {
+        use State::*;
         match status {
             /* Scanning
 
@@ -202,11 +220,7 @@ impl State {
 
             Simple business logic, but many house keeping
              */
-            status @ (DeletionConfirmation { .. }
-            | DeleteSelected
-            | DeletingSelected { .. }
-            | DeletionFailed
-            | DeletionCleanup) => self.delta_delete(status),
+            Delete { inode, state } => self.delta_delete(inode, state),
 
             /* Displaying and Waiting for User Input
 
@@ -216,6 +230,10 @@ impl State {
             The code is ugly but necessary.
              */
             DisplayTreemap { tiles, neighbours } => {
+                use crossterm::event::{
+                    KeyCode::{Backspace, Char, Down, Enter, Esc, Left, Right, Up},
+                    KeyEventKind::Press,
+                };
                 let event = crossterm::event::read().unwrap();
                 match event {
                     Event::Resize(_, _) => CalcNewLayout,
@@ -226,49 +244,51 @@ impl State {
                     - Double key input on Windows: https://github.com/crossterm-rs/crossterm/issues/772
                     - Proposal to make release event opt-in: https://github.com/crossterm-rs/crossterm/pull/778
                      */
-                    Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                        match &key_event.code {
-                            KeyCode::Up => {
-                                self.up(&neighbours);
-                                DisplayTreemap { tiles, neighbours }
-                            }
-                            KeyCode::Down => {
-                                self.down(&neighbours);
-                                DisplayTreemap { tiles, neighbours }
-                            }
-                            KeyCode::Left => {
-                                self.left(&neighbours);
-                                DisplayTreemap { tiles, neighbours }
-                            }
-                            KeyCode::Right => {
-                                self.right(&neighbours);
-                                DisplayTreemap { tiles, neighbours }
-                            }
-                            KeyCode::Esc => {
-                                self.go_out();
-                                CalcNewLayout
-                            }
-                            KeyCode::Backspace => {
-                                self.go_out();
-                                CalcNewLayout
-                            }
-                            KeyCode::Enter => {
-                                self.go_in(&tiles);
-                                CalcNewLayout
-                            }
-                            KeyCode::Char('r') => StartScanning,
-                            KeyCode::Char('d') => match &(tiles[self.now.selected].data) {
-                                TileData::Inode { inode } => DeletionConfirmation {
-                                    inode: inode.clone(),
+                    Event::Key(KeyEvent {
+                        code, kind: Press, ..
+                    }) => match code {
+                        Up => {
+                            self.up(&neighbours);
+                            DisplayTreemap { tiles, neighbours }
+                        }
+                        Down => {
+                            self.down(&neighbours);
+                            DisplayTreemap { tiles, neighbours }
+                        }
+                        Left => {
+                            self.left(&neighbours);
+                            DisplayTreemap { tiles, neighbours }
+                        }
+                        Right => {
+                            self.right(&neighbours);
+                            DisplayTreemap { tiles, neighbours }
+                        }
+                        Esc => {
+                            self.go_out();
+                            CalcNewLayout
+                        }
+                        Backspace => {
+                            self.go_out();
+                            CalcNewLayout
+                        }
+                        Enter => {
+                            self.go_in(&tiles);
+                            CalcNewLayout
+                        }
+                        Char('r') => StartScanning,
+                        Char('d') => match &(tiles[self.now.selected].data) {
+                            TileData::Inode { inode } => Delete {
+                                inode: inode.clone(),
+                                state: DeleteState::Confirmation {
                                     choice: DeleteChoice::No,
                                 },
-                                _non_inode => DisplayTreemap { tiles, neighbours },
                             },
-                            KeyCode::Char('q') => Exit,
-                            _ => DisplayTreemap { tiles, neighbours },
-                        }
-                    }
-                    _ => DisplayTreemap { tiles, neighbours },
+                            _non_inode => DisplayTreemap { tiles, neighbours },
+                        },
+                        Char('q') => Exit,
+                        _other_keys => DisplayTreemap { tiles, neighbours },
+                    },
+                    _non_key_event => DisplayTreemap { tiles, neighbours },
                 }
             }
 
@@ -388,30 +408,76 @@ impl State {
         children.reverse();
     }
 
-    fn delta_delete(&mut self, status: Status) -> Status {
-        use Status::*;
-        match status {
-            DeletionConfirmation { inode, choice } => {
+    fn delta_delete(&mut self, inode: Rc<RefCell<Inode>>, state: DeleteState) -> State {
+        use DeleteState::*;
+        use State::*;
+        match state {
+            Confirmation { choice } => {
                 use crossterm::event::{
                     Event::Key,
                     KeyCode::{Enter, Left, Right},
+                    KeyEventKind::Press,
                 };
                 use DeleteChoice::*;
 
                 let event = crossterm::event::read().unwrap();
                 match (event, choice) {
-                    (Key(KeyEvent { code: Enter, .. }), Yes) => DeleteSelected,
-                    (Key(KeyEvent { code: Enter, .. }), No) => CalcNewLayout,
-                    (Key(KeyEvent { code: Left, .. }), _) => {
-                        DeletionConfirmation { inode, choice: Yes }
-                    }
-                    (Key(KeyEvent { code: Right, .. }), _) => {
-                        DeletionConfirmation { inode, choice: No }
-                    }
-                    (_, choice) => DeletionConfirmation { inode, choice },
+                    (
+                        Key(KeyEvent {
+                            code: Enter,
+                            kind: Press,
+                            ..
+                        }),
+                        Yes,
+                    ) => Delete {
+                        inode,
+                        state: Start,
+                    },
+                    (
+                        Key(KeyEvent {
+                            code: Enter,
+                            kind: Press,
+                            ..
+                        }),
+                        No,
+                    ) => CalcNewLayout,
+                    (
+                        Key(KeyEvent {
+                            code: Left,
+                            kind: Press,
+                            ..
+                        }),
+                        _,
+                    ) => Delete {
+                        inode,
+                        state: Confirmation { choice: Yes },
+                    },
+                    (
+                        Key(KeyEvent {
+                            code: Right,
+                            kind: Press,
+                            ..
+                        }),
+                        _,
+                    ) => Delete {
+                        inode,
+                        state: Confirmation { choice: No },
+                    },
+		    (
+                        Key(KeyEvent {
+                            code: KeyCode::Char('q'),
+                            kind: Press,
+                            ..
+                        }),
+                        _,
+                    ) => Exit,
+                    (_, choice) => Delete {
+                        inode,
+                        state: Confirmation { choice },
+                    },
                 }
             }
-            DeleteSelected => {
+            Start => {
                 let index_in_directory = self.now.starting_index + self.now.selected;
                 let current_directory = self.now.directory.borrow();
                 let children = match &(current_directory.detail) {
@@ -441,12 +507,15 @@ impl State {
                     }),
                 };
 
-                DeletingSelected {
-                    deleted_p,
-                    deleting_thread_handle,
+                Delete {
+                    inode,
+                    state: InProgress {
+                        deleted_p,
+                        deleting_thread_handle,
+                    },
                 }
             }
-            DeletingSelected {
+            InProgress {
                 deleted_p,
                 deleting_thread_handle,
             } => {
@@ -457,23 +526,35 @@ impl State {
                 };
 
                 match status {
-                    Ok(false) => DeletingSelected {
-                        deleted_p: deleted_p.clone(),
-                        deleting_thread_handle,
+                    Ok(false) => Delete {
+                        inode,
+                        state: InProgress {
+                            deleted_p: deleted_p.clone(),
+                            deleting_thread_handle,
+                        },
                     },
                     Ok(true) => {
                         deleting_thread_handle.join().unwrap();
-                        DeletionCleanup
+                        Delete {
+                            inode,
+                            state: Cleanup,
+                        }
                     }
-                    Err(()) => DeletionFailed,
+                    Err(()) => Delete {
+                        inode,
+                        state: Failed,
+                    },
                 }
             }
-            DeletionFailed => {
+            Failed => {
                 use crossterm::event::Event::Key;
                 let event = crossterm::event::read().unwrap();
                 match event {
                     Key(KeyEvent { .. }) => CalcNewLayout,
-                    _ => DeletionFailed,
+                    _ => Delete {
+                        inode,
+                        state: Failed,
+                    },
                 }
             }
             /* Clean up
@@ -481,7 +562,7 @@ impl State {
             Remove the logical inode from memory.
             Modify the history to remain consistent.
              */
-            DeletionCleanup => {
+            Cleanup => {
                 let index_in_directory = self.now.starting_index + self.now.selected;
                 let Inode {
                     usage,
@@ -504,9 +585,6 @@ impl State {
                  */
 
                 CalcNewLayout
-            }
-            _ => {
-                unreachable!("delta_delete: Impossible state {:?}", status);
             }
         }
     }

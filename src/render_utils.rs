@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Flex, Layout, Spacing},
     prelude::*,
     symbols::merge::MergeStrategy,
-    widgets::{Block, Paragraph},
+    widgets::{Block, Padding, Paragraph},
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,7 +16,7 @@ const IEC_STEP_SIZE: u128 = 1024;
 const SELECTED_STYLE: Style = Style::new().fg(Color::White).bg(Color::DarkGray);
 const UNSELECTED_STYLE: Style = Style::new().fg(Color::White).bg(Color::Black);
 
-impl State {
+impl Store {
     pub fn render_directory_path_block(&self, buf: &mut Buffer) {
         let DrawAreas {
             directory_path_rect,
@@ -108,7 +108,7 @@ impl State {
         Paragraph::new(scanning_string).render(modal_text_area, buf);
     }
 
-    pub fn render_deletion_confirmation_modal(
+    pub fn render_delete_confirmation_modal(
         &self,
         full_name: &str,
         choice: DeleteChoice,
@@ -116,27 +116,43 @@ impl State {
     ) {
         let DrawAreas { modal_rect, .. } = self.draw_areas;
 
-        let modal_block = Block::bordered();
+        let modal_block = Block::bordered().padding(Padding {
+            left: 2,
+            right: 2,
+            top: 1,
+            bottom: 1,
+        });
         let modal_inner_rect = modal_block.inner(modal_rect);
         let [message_rect, selections_rect] =
             Layout::vertical(vec![Constraint::Fill(1); 2]).areas(modal_inner_rect);
         let [yes_rect, no_rect] =
             Layout::horizontal(vec![Constraint::Fill(1); 2]).areas(selections_rect);
+        let (yes_span_rect, no_span_rect) = (
+            yes_rect.centered(
+                Constraint::Length("Yes".len() as u16),
+                Constraint::Length(1),
+            ),
+            no_rect.centered(Constraint::Length("No".len() as u16), Constraint::Length(1)),
+        );
+
+        modal_block.render(modal_rect, buf);
+
+        Paragraph::new(format!(
+            "Are you sure you want to delete {}? This cannot be reverted.",
+            full_name
+        ))
+        .render(message_rect, buf);
+
         let (yes_style, no_style) = match choice {
             DeleteChoice::Yes => (SELECTED_STYLE, UNSELECTED_STYLE),
             DeleteChoice::No => (UNSELECTED_STYLE, SELECTED_STYLE),
         };
-        Paragraph::new(format!(
-            "Are you sure you want to delete {:?}? This cannot be reverted.",
-            full_name
-        ))
-            .render(message_rect, buf);
-	Paragraph::new("Yes").style(yes_style).render(yes_rect, buf);
-	Paragraph::new("No").style(no_style).render(no_rect, buf);
+        Span::styled("Yes", yes_style).render(yes_span_rect, buf);
+        Span::styled("No", no_style).render(no_span_rect, buf);
     }
 
-    pub fn render_deleting_modal(&self, buf: &mut Buffer) {
-	let DrawAreas { modal_rect, .. } = self.draw_areas;
+    pub fn render_delete_in_progress_modal(&self, buf: &mut Buffer) {
+        let DrawAreas { modal_rect, .. } = self.draw_areas;
         let dots = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -150,12 +166,12 @@ impl State {
         Paragraph::new(deleting_string).render(modal_text_area, buf);
     }
 
-    pub fn render_delete_failure_modal(&self, buf: &mut Buffer) {
-	let DrawAreas { modal_rect, .. } = self.draw_areas;
-	let failure_string = format!("Failed to delete {}", "placeholder");
-	let modal_text_area = modal_rect.centered(Constraint::Max(50), Constraint::Max(1));
-	Block::bordered().render(modal_rect, buf);
-	Paragraph::new(failure_string).render(modal_text_area, buf);
+    pub fn render_delete_failure_modal(&self, full_name: &str, buf: &mut Buffer) {
+        let DrawAreas { modal_rect, .. } = self.draw_areas;
+        let failure_string = format!("Failed to delete {}", full_name);
+        let modal_text_area = modal_rect.centered(Constraint::Max(50), Constraint::Max(1));
+        Block::bordered().render(modal_rect, buf);
+        Paragraph::new(failure_string).render(modal_text_area, buf);
     }
 }
 

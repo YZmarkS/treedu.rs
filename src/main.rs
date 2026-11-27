@@ -32,8 +32,8 @@ fn main() -> io::Result<()> {
         detail: InodeDetail::Dir(Vec::new()),
     }));
 
-    let mut state = State {
-        status: Status::StartScanning,
+    let mut state = Store {
+        status: State::StartScanning,
         root_path: path.clone(),
         worker_pool_size,
 
