@@ -131,7 +131,7 @@ impl Store {
             ),
             no_rect.centered(Constraint::Length("No".len() as u16), Constraint::Length(1)),
         );
-        let (yes_bg_rect, no_bg_rect) = (
+        let (yes_box_rect, no_box_rect) = (
             yes_span_rect.outer(Margin {
                 horizontal: 2,
                 vertical: 1,
@@ -154,8 +154,8 @@ impl Store {
             DeleteChoice::Yes => (Borders::all(), Borders::empty()),
             DeleteChoice::No => (Borders::empty(), Borders::all()),
         };
-	Block::new().borders(yes_border).render(yes_bg_rect, buf);
-	Block::new().borders(no_border).render(no_bg_rect, buf);
+	Block::new().borders(yes_border).render(yes_box_rect, buf);
+	Block::new().borders(no_border).render(no_box_rect, buf);
 	Span::raw("Yes").render(yes_span_rect, buf);
         Span::raw("No").render(no_span_rect, buf);
     }
